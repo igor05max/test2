@@ -1,1 +1,210 @@
-test8
+import sys
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout,
+                            QPushButton, QFileDialog, QLabel, QWidget, QComboBox)
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QImage, QPixmap
+import cv2
+from yolo_class import YoloMy  # Ваш класс для YOLO
+
+class PoseApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Анализатор позы")
+        self.setGeometry(100, 100, 1000, 700)
+
+        # Переменные для хранения данных
+        self.yolo_model = None
+        self.video_path = None
+        self.cap = None
+        self.timer = QTimer()
+        self.use_camera = False
+        self.camera_index = 0
+        self.available_cameras = self.detect_cameras()
+
+        # Инициализация UI
+        self.init_ui()
+
+    def detect_cameras(self):
+        """Обнаружение доступных камер"""
+        cameras = []
+        for i in range(3):  # Проверяем первые 3 камеры
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                cameras.append(f"Камера {i}")
+                cap.release()
+        return cameras if cameras else ["Камера 0"]
+
+    def init_ui(self):
+        # Главный виджет и лейаут
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout()
+        central_widget.setLayout(main_layout)
+
+        # Виджет для отображения видео
+        self.video_label = QLabel()
+        self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setMinimumSize(800, 600)
+        main_layout.addWidget(self.video_label)
+
+        # Панель кнопок (верхний ряд)
+        top_button_layout = QHBoxLayout()
+
+        # Кнопка выбора модели YOLO
+        self.btn_model = QPushButton("Выбрать модель YOLO")
+        self.btn_model.clicked.connect(self.select_model)
+        top_button_layout.addWidget(self.btn_model)
+
+        # Выпадающий список камер
+        self.camera_combo = QComboBox()
+        self.camera_combo.addItems(self.available_cameras)
+        self.camera_combo.setCurrentIndex(0)
+        self.camera_combo.setFixedWidth(150)
+        top_button_layout.addWidget(self.camera_combo)
+
+        # Кнопка выбора камеры
+        self.btn_camera = QPushButton("Использовать камеру")
+        self.btn_camera.clicked.connect(self.select_camera)
+        top_button_layout.addWidget(self.btn_camera)
+
+        # Кнопка выбора видео
+        self.btn_video = QPushButton("Выбрать видео")
+        self.btn_video.clicked.connect(self.select_video)
+        top_button_layout.addWidget(self.btn_video)
+
+        main_layout.addLayout(top_button_layout)
+
+        # Панель кнопок (нижний ряд)
+        bottom_button_layout = QHBoxLayout()
+
+        # Кнопка запуска обработки
+        self.btn_start = QPushButton("Запустить обработку")
+        self.btn_start.clicked.connect(self.start_processing)
+        self.btn_start.setEnabled(False)
+        self.btn_start.setStyleSheet("background-color: #4CAF50; color: white;")
+        bottom_button_layout.addWidget(self.btn_start)
+
+        # Кнопка остановки
+        self.btn_stop = QPushButton("Остановить")
+        self.btn_stop.clicked.connect(self.stop_processing)
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.setStyleSheet("background-color: #f44336; color: white;")
+        bottom_button_layout.addWidget(self.btn_stop)
+
+        main_layout.addLayout(bottom_button_layout)
+
+        # Статус бар
+        self.status_label = QLabel("Готов к работе")
+        main_layout.addWidget(self.status_label)
+
+        # Настройка таймера для обновления видео
+        self.timer.timeout.connect(self.update_frame)
+
+    def select_model(self):
+        """Выбор файла модели YOLO"""
+        options = QFileDialog.Options()
+        model_path, _ = QFileDialog.getOpenFileName(
+            self, "Выберите модель YOLO", "", "Model Files (*.pt)", options=options)
+
+        if model_path:
+            try:
+                self.yolo_model = YoloMy(path_weights=model_path)
+                self.status_label.setText(f"Модель загружена: {model_path.split('/')[-1]}")
+                self.check_ready()
+            except Exception as e:
+                self.status_label.setText(f"Ошибка загрузки модели: {str(e)}")
+
+    def select_camera(self):
+        """Выбор камеры в качестве источника"""
+        self.use_camera = True
+        self.video_path = None
+        self.camera_index = self.camera_combo.currentIndex()
+        self.status_label.setText(f"Выбрана камера: {self.camera_index}")
+        self.btn_video.setStyleSheet("")  # Сброс стиля
+        self.btn_camera.setStyleSheet("background-color: #2196F3; color: white;")
+        self.check_ready()
+
+    def select_video(self):
+        """Выбор видеофайла"""
+        options = QFileDialog.Options()
+        video_path, _ = QFileDialog.getOpenFileName(
+            self, "Выберите видео", "", "Video Files (*.mp4 *.avi)", options=options)
+
+        if video_path:
+            self.use_camera = False
+            self.video_path = video_path
+            self.status_label.setText(f"Видео выбрано: {video_path.split('/')[-1]}")
+            self.btn_camera.setStyleSheet("")  # Сброс стиля
+            self.btn_video.setStyleSheet("background-color: #2196F3; color: white;")
+            self.check_ready()
+
+    def check_ready(self):
+        """Проверка готовности к запуску"""
+        if self.yolo_model and (self.video_path is not None or self.use_camera):
+            self.btn_start.setEnabled(True)
+        else:
+            self.btn_start.setEnabled(False)
+
+    def start_processing(self):
+        """Запуск обработки видео/камеры"""
+        if self.use_camera:
+            self.cap = cv2.VideoCapture(self.camera_index)
+        else:
+            self.cap = cv2.VideoCapture(self.video_path)
+
+        if not self.cap.isOpened():
+            self.status_label.setText("Ошибка открытия источника видео")
+            return
+
+        self.btn_start.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+        self.btn_model.setEnabled(False)
+        self.btn_video.setEnabled(False)
+        self.btn_camera.setEnabled(False)
+        self.status_label.setText("Обработка..." if self.use_camera else "Обработка видео...")
+        self.timer.start(30)  # ~33 FPS
+
+    def stop_processing(self):
+        """Остановка обработки"""
+        self.timer.stop()
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+        self.btn_start.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.btn_model.setEnabled(True)
+        self.btn_video.setEnabled(True)
+        self.btn_camera.setEnabled(True)
+        self.status_label.setText("Остановлено")
+
+    def update_frame(self):
+        """Обновление кадра видео/камеры"""
+        ret, frame = self.cap.read()
+        if not ret:
+            if not self.use_camera:
+                self.status_label.setText("Обработка завершена")
+            self.stop_processing()
+            return
+
+        # Обработка кадра YOLO
+        yolo_points = self.yolo_model.process_frame_yolo(frame)
+        if yolo_points is not None:
+            self.yolo_model.draw_yolo_skeleton(frame, yolo_points)
+
+        # Отображение кадра
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = frame.shape
+        bytes_per_line = ch * w
+        qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        self.video_label.setPixmap(QPixmap.fromImage(qt_image))
+
+    def closeEvent(self, event):
+        """Обработка закрытия окна"""
+        self.stop_processing()
+        event.accept()
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = PoseApp()
+    window.show()
+    sys.exit(app.exec_())
